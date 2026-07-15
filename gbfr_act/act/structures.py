@@ -83,6 +83,11 @@ class Actor:
         p_data_over_mastery_off = 0
         p_data_sigil_off = 0
 
+    # Game 2.0 removed the party index that used to live at address + 0x170.
+    # Hand out a stable per-instance id instead, keyed by actor pointer.
+    _idx_by_address = {}
+    _next_idx = 0
+
     def __str__(self):
         return f"{self.type_name}#{self.address:x}"
 
@@ -106,7 +111,12 @@ class Actor:
 
     @property
     def idx(self):
-        return u32_from(self.address + 0x170)
+        idx = Actor._idx_by_address.get(self.address)
+        if idx is None:
+            idx = Actor._next_idx
+            Actor._next_idx += 1
+            Actor._idx_by_address[self.address] = idx
+        return idx
 
     @property
     def parent(self):
@@ -119,7 +129,11 @@ class Actor:
             case 0xc9f45042:  # 老男人武器 # Wp1890
                 return Actor(size_t_from(size_t_from(self.address + 0x578) + 0x70))
             case 0xf5755c0e:  # 龙人化 # Pl2000
-                return Actor(size_t_from(size_t_from(self.address + 0xd488) + 0x70))
+                return Actor(size_t_from(size_t_from(self.address + 0x1ca98) + 0x70))
+            case 0x5b1ab457:  # Wp2290
+                return Actor(size_t_from(size_t_from(self.address + 0x500) + 0x70))
+            case 0x69c0ca71:  # Pl0600PlantRose
+                return Actor(size_t_from(size_t_from(self.address + 0x7e0) + 0x70))
 
     @property
     def canceled_action(self):
@@ -160,7 +174,7 @@ class Actor:
 
     @property
     def party_index(self):
-        return u32_from(self.p_sigil_data + 0x230)
+        return u32_from(self.p_sigil_data + 0x22c)
 
     def member_info(self):
         w = self.weapon
@@ -206,11 +220,11 @@ class ProcessDamageSource:
 
     @property
     def damage(self):
-        return i32_from(self.address + 0xd0)
+        return i32_from(self.address + 0xd4)
 
     @property
     def flags(self):
-        return u64_from(self.address + 0xd8)
+        return u64_from(self.address + 0xe8)
 
     @property
     def critical(self):
@@ -218,12 +232,8 @@ class ProcessDamageSource:
 
     @property
     def dmg_cap(self):
-        return i32_from(self.address + 0x264)
-
-    @property
-    def attack_rate(self):
-        return float_from(self.address + 0xd4)
+        return i32_from(self.address + 0x2bc)
 
     @property
     def action_id(self):
-        return u32_from(self.address + 0x154)
+        return u32_from(self.address + 0x16c)

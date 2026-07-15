@@ -26,34 +26,55 @@ class Act:
             ctypes.c_uint8
         ])
 
-        p_process_dot_evt, = ensure_same(map(tuple, scanner.find_vals('44 89 74 24 ? 48 ? ? ? ? 48 ? ? e8 * * * * 4c ? ? ? ? ? ?')))
-        self.process_dot_evt_hook = Hook(p_process_dot_evt, self._on_process_dot_evt, ctypes.c_size_t, [
-            ctypes.c_size_t,
-            ctypes.c_size_t
-        ])
+        # The signatures below are more fragile across game updates than the core
+        # damage hook. If one no longer matches, disable just that feature instead
+        # of taking down the whole tool.
+        self.process_dot_evt_hook = None
+        try:
+            p_process_dot_evt, = ensure_same(map(tuple, scanner.find_vals('44 89 74 24 ? 48 ? ? ? ? 48 ? ? e8 * * * * 4c ? ? ? ? ? ?')))
+            self.process_dot_evt_hook = Hook(p_process_dot_evt, self._on_process_dot_evt, ctypes.c_size_t, [
+                ctypes.c_size_t,
+                ctypes.c_size_t
+            ])
+        except Exception:
+            logging.error('failed to locate process_dot_evt; DoT damage tracking disabled', exc_info=True)
 
-        p_on_enter_area, = scanner.find_val('e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?')
-        self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_uint64, [
-            ctypes.c_uint,
-            ctypes.c_uint64,
-            ctypes.c_uint64,
-            ctypes.c_uint64,
-        ])
-        p_on_inc_death_cnt, = scanner.find_val('e8 * * * * 49 ? ? 48 ? ? ? ? ? ? 83 78 ? ?')
-        self.on_inc_death_cnt_hook = Hook(p_on_inc_death_cnt, self._on_inc_death_cnt, None, [
-            ctypes.c_void_p
-        ])
+        self.on_enter_area_hook = None
+        try:
+            p_on_enter_area, = scanner.find_val('e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?')
+            self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_uint64, [
+                ctypes.c_uint,
+                ctypes.c_uint64,
+                ctypes.c_uint64,
+                ctypes.c_uint64,
+            ])
+        except Exception:
+            logging.error('failed to locate on_enter_area; area-enter tracking disabled', exc_info=True)
 
-        self.p_qword_1467572B0, = scanner.find_val("48 ? ? * * * * 83 49 ? ? e8 ? ? ? ?")
-        self._ui_actor_off, = scanner.find_val("48 ? ? <? ? ? ?> 48 ? ? ? ? ? ? 75 ? 48 ? ? ? ? ? ? 48 39 86")
-        Actor.Offsets.p_data_off, = scanner.find_val("48 ? ? <? ? ? ?> 89 86 ? ? ? ? 44 89 96")
-        Actor.Offsets.p_data_sigil_off, = scanner.find_val("49 89 84 24 <? ? ? ?> 48 ? ? 74 ? 49 ? ? ? ? ? ? ? 48 89 43 ? 48 89 8b ? ? ? ?")
-        Actor.Offsets.p_data_weapon_off, = scanner.find_val("48 ? ? <?> 48 ? ? ? 48 ? ? e8 ? ? ? ? 31 ? 83 bf ? ? ? ? ?")
-        Actor.Offsets.p_data_over_mastery_off = scanner.find_val(
-            "49 ? ? <? ? ? ?> 49 ? ? ? ? ? ? ? e8 ? ? ? ? 49 ? ? ? ? ? ? 49 ? ? ? ? ? ? ? 41"
-        )[0] + scanner.find_val(
-            "49 ? ? ? <? ? ? ?> e8 ? ? ? ? 41 ? ? e9"
-        )[0]
+        self.on_inc_death_cnt_hook = None
+        try:
+            p_on_inc_death_cnt, = scanner.find_val('e8 * * * * 49 ? ? 48 ? ? ? ? ? ? 83 78 ? ?')
+            self.on_inc_death_cnt_hook = Hook(p_on_inc_death_cnt, self._on_inc_death_cnt, None, [
+                ctypes.c_void_p
+            ])
+        except Exception:
+            logging.error('failed to locate on_inc_death_cnt; death-count tracking disabled', exc_info=True)
+
+        self.p_qword_1467572B0 = None
+        try:
+            self.p_qword_1467572B0, = scanner.find_val("48 ? ? * * * * 83 49 ? ? e8 ? ? ? ?")
+            self._ui_actor_off, = scanner.find_val("48 ? ? <? ? ? ?> 48 ? ? ? ? ? ? 75 ? 48 ? ? ? ? ? ? 48 39 86")
+            Actor.Offsets.p_data_off, = scanner.find_val("48 ? ? <? ? ? ?> 89 86 ? ? ? ? 44 89 96")
+            Actor.Offsets.p_data_sigil_off, = scanner.find_val("49 89 84 24 <? ? ? ?> 48 ? ? 74 ? 49 ? ? ? ? ? ? ? 48 89 43 ? 48 89 8b ? ? ? ?")
+            Actor.Offsets.p_data_weapon_off, = scanner.find_val("48 ? ? <?> 48 ? ? ? 48 ? ? e8 ? ? ? ? 31 ? 83 bf ? ? ? ? ?")
+            Actor.Offsets.p_data_over_mastery_off = scanner.find_val(
+                "49 ? ? <? ? ? ?> 49 ? ? ? ? ? ? ? e8 ? ? ? ? 49 ? ? ? ? ? ? 49 ? ? ? ? ? ? ? 41"
+            )[0] + scanner.find_val(
+                "49 ? ? ? <? ? ? ?> e8 ? ? ? ? 41 ? ? e9"
+            )[0]
+        except Exception:
+            logging.error('failed to locate party/member-info signatures; party tracking disabled', exc_info=True)
+            self.p_qword_1467572B0 = None
 
         self.i_ui_comp_name = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_size_t)
         self.team_map = None
@@ -64,6 +85,7 @@ class Act:
 
     def build_team_map(self):
         if self.team_map is not None: return
+        if self.p_qword_1467572B0 is None: return
         self.team_map = {}
         qword_1467572B0 = size_t_from(self.p_qword_1467572B0)
         p_party_base = size_t_from(qword_1467572B0 + 0x20)
@@ -170,18 +192,16 @@ class Act:
     def install(self):
         assert not hasattr(sys, self._sys_key), 'Act already installed'
         self.process_damage_evt_hook.install_and_enable()
-        self.process_dot_evt_hook.install_and_enable()
-        self.on_enter_area_hook.install_and_enable()
-        self.on_inc_death_cnt_hook.install_and_enable()
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook):
+            if hook: hook.install_and_enable()
         setattr(sys, self._sys_key, self)
         return self
 
     def uninstall(self):
         assert getattr(sys, self._sys_key, None) is self, 'Act not installed'
         self.process_damage_evt_hook.uninstall()
-        self.process_dot_evt_hook.uninstall()
-        self.on_enter_area_hook.uninstall()
-        self.on_inc_death_cnt_hook.uninstall()
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook):
+            if hook: hook.uninstall()
         delattr(sys, self._sys_key)
         return self
 
