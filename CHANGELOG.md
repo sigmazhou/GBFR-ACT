@@ -85,3 +85,29 @@
   covers the base roster through `PL1900` and has no entries for
   Sandalphon/Seofon/Tweyen or the newest DLC characters — their skills will
   display with raw IDs instead of names until that table is extended.
+
+## 2026-07-16
+
+### Fixed
+- Confirmed `on_enter_area`'s signature is fully dead post-DLC, not just
+  ambiguous. Added debug tooling to investigate (`Act._debug`): `_dump_matches()`
+  logs every match for a pattern (call site + resolved call target), and a
+  probe mode installs a passthrough+logging hook on every distinct candidate
+  target so we can see which one, if any, fires on a live area transition.
+  The pattern now matches 11 unrelated call sites (a generic "spill a float to
+  a local" compiler idiom, not a specific function anymore); none of them
+  fired when actually transitioning areas in-game. Also hardened `install()`/
+  `uninstall()` to catch per-hook install/enable failures individually (one
+  candidate hit `EasyHookException 0x1E7: Hooking near conditional jumps is
+  not supported`), so a bad probe address can't crash startup.
+- Replaced the dead `on_enter_area` signature with gbfr-logs' battle-end hook
+  instead of continuing to chase a new area-enter signature. This targets a
+  completely different, fully literal signature (no wildcards, same compiled
+  game code as the identity-refresh hook) for the quest result-reward setup
+  function, which fires once per finished fight — arguably a more precise
+  "split the record now" signal than area-enter ever was, since it fires
+  right when the fight ends rather than waiting for the next area to load.
+  `Act._on_battle_end` replaces `Act._on_enter_area`; the public
+  `Act.on_enter_area()` override point (used by `act_ws.py`) is unchanged, just
+  now triggered by this hook. The 2-minute inactivity fallback added yesterday
+  remains in place as a backstop in case this hook's signature breaks too.

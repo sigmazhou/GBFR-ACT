@@ -58,41 +58,44 @@ class Act:
         except Exception:
             logging.error('failed to locate process_dot_evt; DoT damage tracking disabled', exc_info=True)
 
+        # Confirmed dead post-DLC as of 2026-07-16: this pattern now matches 11 unrelated
+        # call sites (a generic "spill a float to a local" compiler idiom, not a specific
+        # function anymore), and none of them fired on a live area transition. Disabled
+        # but kept for reference / in case a future game patch changes things back.
+        # Superseded by the battle-end hook further down.
         self.on_enter_area_hook = None
-        self.on_enter_area_probe_hooks = []
+        if False:
+            try:
+                ON_ENTER_AREA_SIG = 'e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?'
+                _dump_matches('on_enter_area', ON_ENTER_AREA_SIG, scanner, Act._debug)
+                # This pattern's `*` capture resolves to the call's target function address,
+                # not the call site. It used to match 2+ call sites; tolerate that (like
+                # process_dot_evt above) as long as they all target the same function,
+                # instead of requiring the raw match position to be unique.
+                p_on_enter_area, = ensure_same(map(tuple, scanner.find_vals(ON_ENTER_AREA_SIG)))
+                self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_uint64, [
+                    ctypes.c_uint,
+                    ctypes.c_uint64,
+                    ctypes.c_uint64,
+                    ctypes.c_uint64,
+                ])
+            except Exception:
+                logging.error('failed to locate on_enter_area; area-enter tracking disabled', exc_info=True)
+
+        # gbfr-logs' battle-end hook: a completely different, fully literal signature (no
+        # wildcards, same compiled game code as the identity-refresh hook) for the quest
+        # result-reward setup function, which fires once per finished fight - a more
+        # precise "split the record now" signal than area-enter ever was.
+        self.on_battle_end_hook = None
         try:
-            ON_ENTER_AREA_SIG = 'e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?'
-            _dump_matches('on_enter_area', ON_ENTER_AREA_SIG, scanner, Act._debug)
-            # This pattern's `*` capture resolves to the call's target function address, not
-            # the call site. Post-DLC it now matches 2+ call sites; tolerate that (like
-            # process_dot_evt above) as long as they all target the same function, instead
-            # of requiring the raw match position to be unique.
-            p_on_enter_area, = ensure_same(map(tuple, scanner.find_vals(ON_ENTER_AREA_SIG)))
-            self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_uint64, [
-                ctypes.c_uint,
-                ctypes.c_uint64,
-                ctypes.c_uint64,
-                ctypes.c_uint64,
+            p_on_battle_end = scanner.find_address(
+                "41 56 56 57 53 48 83 ec 38 48 89 ce 48 8b 0d ? ? ? ? 48 8d 54 24 30 41 b8 ab 4e f1 51 e8 ? ? ? ? 48 8b 44 24 30 48 85 c0 0f 84 ? ? ? ? 48 8b 58 18 4c 8b 70 20 4c 39 f3 0f 84 ? ? ? ? 48 8d 7c 24 2c"
+            )
+            self.on_battle_end_hook = Hook(p_on_battle_end, self._on_battle_end, None, [
+                ctypes.c_size_t
             ])
         except Exception:
-            logging.error('failed to locate on_enter_area; area-enter tracking disabled', exc_info=True)
-            if Act._debug:
-                # The candidates disagree on a target function, so we can't tell which is
-                # real from static bytes alone. Install a passthrough+logging probe on every
-                # distinct candidate instead, so we can see which one actually fires when
-                # you transition areas in-game (start a quest / return to lobby).
-                try:
-                    targets = sorted({args[0] for _, args in scanner.search(ON_ENTER_AREA_SIG)})
-                    print(f'[debug] on_enter_area: probing {len(targets)} candidate target(s): {[hex(t) for t in targets]}')
-                    for target in targets:
-                        self.on_enter_area_probe_hooks.append(Hook(target, self._on_enter_area_probe, ctypes.c_uint64, [
-                            ctypes.c_uint,
-                            ctypes.c_uint64,
-                            ctypes.c_uint64,
-                            ctypes.c_uint64,
-                        ]))
-                except Exception:
-                    logging.error('on_enter_area probe setup failed', exc_info=True)
+            logging.error('failed to locate on_battle_end; fights will only split after the inactivity timeout', exc_info=True)
 
         self.on_inc_death_cnt_hook = None
         try:
@@ -234,9 +237,18 @@ class Act:
             logging.error('on_process_dot_evt', exc_info=True)
         return res
 
-    def _on_enter_area_probe(self, hook, *a):
-        print(f'[debug] on_enter_area candidate {hook.at:#x} fired args={[hex(x) for x in a]}')
-        return hook.original(*a)
+    # Unused (see the disabled `if False:` block in __init__): kept for reference in
+    # case ON_ENTER_AREA_SIG is ever revisited.
+    def _on_enter_area(self, hook, *a):
+        res = hook.original(*a)
+        try:
+            self.team_map = None
+            self.member_info = None
+            self.player_identities = {}
+            self.on_enter_area()
+        except:
+            logging.error('on_enter_area', exc_info=True)
+        return res
 
     def _on_refresh_player_identity(self, hook, p_record):
         hook.original(p_record)
@@ -264,16 +276,14 @@ class Act:
         except:
             logging.error('on_refresh_player_identity', exc_info=True)
 
-    def _on_enter_area(self, hook, *a):
-        res = hook.original(*a)
+    def _on_battle_end(self, hook, a1):
+        hook.original(a1)
         try:
             self.team_map = None
             self.member_info = None
-            self.player_identities = {}
             self.on_enter_area()
         except:
-            logging.error('on_enter_area', exc_info=True)
-        return res
+            logging.error('on_battle_end', exc_info=True)
 
     def _on_inc_death_cnt(self, hook, a1):
         hook.original(a1)
@@ -302,8 +312,8 @@ class Act:
     def install(self):
         assert not hasattr(sys, self._sys_key), 'Act already installed'
         self.process_damage_evt_hook.install_and_enable()
-        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook,
-                     self.refresh_player_identity_hook, *self.on_enter_area_probe_hooks):
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_battle_end_hook, self.on_inc_death_cnt_hook,
+                     self.refresh_player_identity_hook):
             if not hook: continue
             try:
                 hook.install_and_enable()
@@ -315,8 +325,8 @@ class Act:
     def uninstall(self):
         assert getattr(sys, self._sys_key, None) is self, 'Act not installed'
         self.process_damage_evt_hook.uninstall()
-        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook,
-                     self.refresh_player_identity_hook, *self.on_enter_area_probe_hooks):
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_battle_end_hook, self.on_inc_death_cnt_hook,
+                     self.refresh_player_identity_hook):
             if not hook: continue
             try:
                 hook.uninstall()
