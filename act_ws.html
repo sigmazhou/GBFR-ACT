@@ -943,6 +943,11 @@
                     period: 0,
                     last_frame: 0,
                 }
+                // Fallback for splitting fights when the game's area-enter signal isn't
+                // available (e.g. its signature breaks after a game update): if a record
+                // with damage has seen no events for this long, archive it so the next
+                // hit starts a fresh record instead of merging into the previous fight.
+                const AUTO_SPLIT_INACTIVITY_MS = 120_000;
                 const export_log = (record) => record.export_log();
 
                 const set_actor_dialog = (actor) => {
@@ -1080,6 +1085,11 @@
                     if (update_var.last_frame && Date.now() > last_record.last_record_at + period) while (last_record.last_record_at > update_var.last_frame) {
                         update_var.last_frame += period;
                         get_latest_record().update(update_var.last_frame);
+                    }
+                    if (!last_record.archived && last_record.damage > 0 &&
+                        last_record.last_record_at && Date.now() - last_record.last_record_at > AUTO_SPLIT_INACTIVITY_MS) {
+                        if (log_cond.evt) log(`auto-splitting record ${last_record.unique_key} after ${AUTO_SPLIT_INACTIVITY_MS}ms of inactivity`);
+                        archive_record(last_record);
                     }
                     get_latest_record().redraw_chart();
                 }
