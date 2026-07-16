@@ -13,14 +13,17 @@ def ensure_same(args):
 
 class Act:
     _sys_key = '_act_'
-    _debug = True  # TEMP: prints raw damage-hook hits to diagnose post-DLC breakage; flip off once resolved
+    _debug = False  # set True to dump raw damage-hook hits to console for offset/ABI diagnosis
 
     def __init__(self):
         self.server = get_server()
         scanner = Process.current.base_scanner()
 
         p_process_damage_evt, = scanner.find_val('e8 * * * * 66 83 bc 24 ? ? ? ? ?')
-        self.process_damage_evt_hook = Hook(p_process_damage_evt, self._on_process_damage_evt, ctypes.c_size_t, [
+        # Game 2.0 recompiled this function returning a bool: only the low byte (AL) is a
+        # meaningful "was this a processed hit" flag, the rest of the register is leftover
+        # garbage. Reading it as a full c_size_t used to work pre-DLC but now corrupts the gate.
+        self.process_damage_evt_hook = Hook(p_process_damage_evt, self._on_process_damage_evt, ctypes.c_uint8, [
             ctypes.c_size_t,
             ctypes.c_size_t,
             ctypes.c_size_t,
@@ -123,7 +126,7 @@ class Act:
         except:
             logging.error('on_process_damage_evt', exc_info=True)
         res = hook.original(p_target_evt, p_source_evt, a3, a4)  # return 0 if it is non processed damage event
-        if Act._debug:  # TEMP DEBUG, remove after diagnosis
+        if Act._debug:
             try:
                 dump = bytes_from(p_source_evt, 0x2d0).hex()
             except Exception as e:

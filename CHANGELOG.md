@@ -25,6 +25,15 @@
   tracking, and the party/member-info signature group are now each wrapped so
   a failed scan disables just that feature (with a logged error) instead of
   preventing the tool from starting. The core damage hook remains required.
+- Fixed the core damage hook silently dropping almost all hits after the DLC
+  update. `process_damage_evt`'s return value was declared as a full
+  `c_size_t`, but the recompiled function now only guarantees its low byte
+  (`AL`) as the "was this hit processed" flag — the upper bytes are leftover
+  register garbage. Reading the full 8 bytes made the processed/not-processed
+  gate essentially random. Declared the hook's return type as `c_uint8`
+  instead, so only the meaningful byte is read. Diagnosed by dumping the raw
+  event struct and cross-referencing an on-screen damage number, which also
+  confirmed the `damage` offset fix above (`0xD4`) is correct.
 
 ### Known limitations
 - `Actor.canceled_action` (`0xBFF8`) could not be cross-verified (no
