@@ -140,6 +140,12 @@ class Actor:
         return u32_from(self.address + 0xbff8)
 
     @property
+    def player_key(self):
+        # Only valid on concrete player actors; other actor types may not have
+        # allocations large enough to reach this offset. Guard callers with try/except.
+        return u32_from(self.address + 0x1ab40)
+
+    @property
     def weapon(self):
         p_weapon = self.address + self.Offsets.p_data_off + self.Offsets.p_data_weapon_off
         size_t_from(p_weapon)  # test address

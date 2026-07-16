@@ -14,6 +14,7 @@ def ensure_same(args):
 class Act:
     _sys_key = '_act_'
     _debug = False  # set True to dump raw damage-hook hits to console for offset/ABI diagnosis
+    _invalid_player_key = 0x887AE0B0
 
     def __init__(self):
         self.server = get_server()
@@ -80,12 +81,42 @@ class Act:
             logging.error('failed to locate party/member-info signatures; party tracking disabled', exc_info=True)
             self.p_qword_1467572B0 = None
 
+        # Fallback party attribution: the party-table walk above no longer resolves in
+        # game 2.0. This hooks the function that refreshes a player's identity snapshot
+        # (fully literal signature, no wildcards) and reads a stable per-actor player key
+        # to join damage-event sources against cached identities, independent of the
+        # broken global party-table pointer.
+        self.refresh_player_identity_hook = None
+        try:
+            p_refresh_player_identity = scanner.find_address(
+                "55 41 57 41 56 41 54 56 57 53 48 83 ec 70 48 8d 6c 24 70 48 c7 45 f8 fe ff ff ff 80 b9 bc 5e 00 00 00"
+            )
+            self.refresh_player_identity_hook = Hook(p_refresh_player_identity, self._on_refresh_player_identity, None, [
+                ctypes.c_size_t
+            ])
+        except Exception:
+            logging.error('failed to locate refresh_player_identity; party attribution disabled', exc_info=True)
+
         self.i_ui_comp_name = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_size_t)
         self.team_map = None
         self.member_info = None
+        self.player_identities = {}
 
     def actor_data(self, actor: Actor):
-        return actor.type_name, actor.idx, actor.type_id, self.team_map.get(actor.address, -1) if self.team_map else -1
+        return actor.type_name, actor.idx, actor.type_id, self.party_index_of(actor)
+
+    def party_index_of(self, actor: Actor):
+        if self.team_map and actor.address in self.team_map:
+            return self.team_map[actor.address]
+        try:
+            player_key = actor.player_key
+        except Exception:
+            player_key = 0
+        if player_key and player_key != self._invalid_player_key:
+            for party_index, identity in self.player_identities.items():
+                if identity['player_key'] == player_key:
+                    return party_index
+        return -1
 
     def build_team_map(self):
         if self.team_map is not None: return
@@ -165,11 +196,38 @@ class Act:
             logging.error('on_process_dot_evt', exc_info=True)
         return res
 
+    def _on_refresh_player_identity(self, hook, p_record):
+        hook.original(p_record)
+        try:
+            if not p_record: return
+            player_key = u32_from(p_record + 0x5ea8)
+            if player_key == 0 or player_key == self._invalid_player_key: return
+            p_snapshot = size_t_from(p_record + 0x5e60)
+            if not p_snapshot: return
+            is_online = u32_from(p_snapshot + 0x1c8)
+            party_index = u32_from(p_snapshot + 0x22c)
+            if is_online > 1 or party_index > 3: return
+            # Before an online party is fully populated, the game creates placeholder
+            # records for slots 1-3 using the local profile name; skip those.
+            if party_index != 0 and not is_online: return
+            display_name = VBuffer(p_snapshot + 0x208).raw.decode('utf-8', 'ignore')
+            if not display_name: return
+            character_name = VBuffer(p_snapshot + 0x1e8).raw.decode('utf-8', 'ignore')
+            self.player_identities[party_index] = {
+                'player_key': player_key,
+                'character_name': character_name,
+                'display_name': display_name,
+                'is_online': bool(is_online),
+            }
+        except:
+            logging.error('on_refresh_player_identity', exc_info=True)
+
     def _on_enter_area(self, hook, *a):
         res = hook.original(*a)
         try:
             self.team_map = None
             self.member_info = None
+            self.player_identities = {}
             self.on_enter_area()
         except:
             logging.error('on_enter_area', exc_info=True)
@@ -202,7 +260,7 @@ class Act:
     def install(self):
         assert not hasattr(sys, self._sys_key), 'Act already installed'
         self.process_damage_evt_hook.install_and_enable()
-        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook):
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook, self.refresh_player_identity_hook):
             if hook: hook.install_and_enable()
         setattr(sys, self._sys_key, self)
         return self
@@ -210,7 +268,7 @@ class Act:
     def uninstall(self):
         assert getattr(sys, self._sys_key, None) is self, 'Act not installed'
         self.process_damage_evt_hook.uninstall()
-        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook):
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook, self.refresh_player_identity_hook):
             if hook: hook.uninstall()
         delattr(sys, self._sys_key)
         return self

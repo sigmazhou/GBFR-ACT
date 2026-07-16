@@ -34,6 +34,30 @@
   instead, so only the meaningful byte is read. Diagnosed by dumping the raw
   event struct and cross-referencing an on-screen damage number, which also
   confirmed the `damage` offset fix above (`0xD4`) is correct.
+- Fixed the damage meter showing fight time but no damage rows. The frontend
+  (`act_ws.html`) drops any damage event whose source doesn't resolve to a
+  party slot (`party_idx === -1`), and that resolution depended entirely on
+  `build_team_map()`'s global party-table pointer walk, which still fails to
+  find its signature (`p_qword_1467572B0`) post-DLC. Rather than keep
+  re-deriving that broken pointer chain, ported gbfr-logs' replacement
+  mechanism instead: their 2.0.2 fix abandoned the same party-table walk in
+  favor of hooking the function that refreshes a player's identity snapshot
+  and reading a stable per-actor `player_key` field. Added the equivalent
+  here:
+  - `Actor.player_key` (new): reads `+0x1AB40`, valid only on concrete player
+    actors.
+  - New hook on the identity-refresh function, found via a fully literal
+    byte signature (no wildcards, reused directly from gbfr-logs since it's
+    the same compiled game code): caches each party slot's `player_key`,
+    `display_name`, `character_name`, and online status as identities are
+    refreshed (`Act._on_refresh_player_identity`).
+  - `Act.party_index_of()` (new): joins a damage source's `player_key`
+    against the cached identities to recover its party slot, falling back to
+    the (currently non-functional) old `team_map` first if that ever starts
+    resolving again.
+  - This restores party attribution for the damage meter; it does not restore
+    the party-member equipment/sigil panel, which still depends on the
+    separately-broken `Actor.Offsets` signature group.
 
 ### Known limitations
 - `Actor.canceled_action` (`0xBFF8`) could not be cross-verified (no
