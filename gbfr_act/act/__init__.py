@@ -11,6 +11,18 @@ def ensure_same(args):
     return s.pop()
 
 
+def _dump_matches(name, pattern, scanner, enabled):
+    if not enabled: return
+    try:
+        matches = list(scanner.search(pattern))
+    except Exception as e:
+        print(f'[debug] {name}: search error: {e!r}')
+        return
+    print(f'[debug] {name}: {len(matches)} match(es) for {pattern!r}')
+    for call_addr, args in matches:
+        print(f'[debug]   call_at={call_addr:#x} captured={[hex(a) for a in args]}')
+
+
 class Act:
     _sys_key = '_act_'
     _debug = False  # set True to dump raw damage-hook hits to console for offset/ABI diagnosis
@@ -36,7 +48,9 @@ class Act:
         # of taking down the whole tool.
         self.process_dot_evt_hook = None
         try:
-            p_process_dot_evt, = ensure_same(map(tuple, scanner.find_vals('44 89 74 24 ? 48 ? ? ? ? 48 ? ? e8 * * * * 4c ? ? ? ? ? ?')))
+            PROCESS_DOT_EVT_SIG = '44 89 74 24 ? 48 ? ? ? ? 48 ? ? e8 * * * * 4c ? ? ? ? ? ?'
+            _dump_matches('process_dot_evt', PROCESS_DOT_EVT_SIG, scanner, Act._debug)
+            p_process_dot_evt, = ensure_same(map(tuple, scanner.find_vals(PROCESS_DOT_EVT_SIG)))
             self.process_dot_evt_hook = Hook(p_process_dot_evt, self._on_process_dot_evt, ctypes.c_size_t, [
                 ctypes.c_size_t,
                 ctypes.c_size_t
@@ -45,8 +59,15 @@ class Act:
             logging.error('failed to locate process_dot_evt; DoT damage tracking disabled', exc_info=True)
 
         self.on_enter_area_hook = None
+        self.on_enter_area_probe_hooks = []
         try:
-            p_on_enter_area, = scanner.find_val('e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?')
+            ON_ENTER_AREA_SIG = 'e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?'
+            _dump_matches('on_enter_area', ON_ENTER_AREA_SIG, scanner, Act._debug)
+            # This pattern's `*` capture resolves to the call's target function address, not
+            # the call site. Post-DLC it now matches 2+ call sites; tolerate that (like
+            # process_dot_evt above) as long as they all target the same function, instead
+            # of requiring the raw match position to be unique.
+            p_on_enter_area, = ensure_same(map(tuple, scanner.find_vals(ON_ENTER_AREA_SIG)))
             self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_uint64, [
                 ctypes.c_uint,
                 ctypes.c_uint64,
@@ -55,6 +76,23 @@ class Act:
             ])
         except Exception:
             logging.error('failed to locate on_enter_area; area-enter tracking disabled', exc_info=True)
+            if Act._debug:
+                # The candidates disagree on a target function, so we can't tell which is
+                # real from static bytes alone. Install a passthrough+logging probe on every
+                # distinct candidate instead, so we can see which one actually fires when
+                # you transition areas in-game (start a quest / return to lobby).
+                try:
+                    targets = sorted({args[0] for _, args in scanner.search(ON_ENTER_AREA_SIG)})
+                    print(f'[debug] on_enter_area: probing {len(targets)} candidate target(s): {[hex(t) for t in targets]}')
+                    for target in targets:
+                        self.on_enter_area_probe_hooks.append(Hook(target, self._on_enter_area_probe, ctypes.c_uint64, [
+                            ctypes.c_uint,
+                            ctypes.c_uint64,
+                            ctypes.c_uint64,
+                            ctypes.c_uint64,
+                        ]))
+                except Exception:
+                    logging.error('on_enter_area probe setup failed', exc_info=True)
 
         self.on_inc_death_cnt_hook = None
         try:
@@ -196,6 +234,10 @@ class Act:
             logging.error('on_process_dot_evt', exc_info=True)
         return res
 
+    def _on_enter_area_probe(self, hook, *a):
+        print(f'[debug] on_enter_area candidate {hook.at:#x} fired args={[hex(x) for x in a]}')
+        return hook.original(*a)
+
     def _on_refresh_player_identity(self, hook, p_record):
         hook.original(p_record)
         try:
@@ -260,16 +302,26 @@ class Act:
     def install(self):
         assert not hasattr(sys, self._sys_key), 'Act already installed'
         self.process_damage_evt_hook.install_and_enable()
-        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook, self.refresh_player_identity_hook):
-            if hook: hook.install_and_enable()
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook,
+                     self.refresh_player_identity_hook, *self.on_enter_area_probe_hooks):
+            if not hook: continue
+            try:
+                hook.install_and_enable()
+            except Exception:
+                logging.error(f'failed to install hook at {hook.at:#x}', exc_info=True)
         setattr(sys, self._sys_key, self)
         return self
 
     def uninstall(self):
         assert getattr(sys, self._sys_key, None) is self, 'Act not installed'
         self.process_damage_evt_hook.uninstall()
-        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook, self.refresh_player_identity_hook):
-            if hook: hook.uninstall()
+        for hook in (self.process_dot_evt_hook, self.on_enter_area_hook, self.on_inc_death_cnt_hook,
+                     self.refresh_player_identity_hook, *self.on_enter_area_probe_hooks):
+            if not hook: continue
+            try:
+                hook.uninstall()
+            except Exception:
+                logging.error(f'failed to uninstall hook at {hook.at:#x}', exc_info=True)
         delattr(sys, self._sys_key)
         return self
 

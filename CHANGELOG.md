@@ -58,6 +58,22 @@
   - This restores party attribution for the damage meter; it does not restore
     the party-member equipment/sigil panel, which still depends on the
     separately-broken `Actor.Offsets` signature group.
+- Fixed fights no longer separating into distinct records. The frontend only
+  ever starts a new record on an `enter_area` event, which comes from
+  `on_enter_area_hook` — one of the signatures that still fails to resolve
+  post-DLC (`e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?` now matches 2+
+  locations, ambiguous). Rather than keep hunting for a new unique signature,
+  ported gbfr-logs' own documented fallback for this exact situation: they run
+  a periodic inactivity check (`AUTO_SAVE_INACTIVITY_MS = 120_000`) that
+  auto-finishes an in-progress encounter if it's had damage but seen no
+  activity for 2 minutes, so encounters still get split even when their
+  precise "battle end" hook is unavailable. Added the equivalent in
+  `act_ws.html`'s existing 200ms update loop: `AUTO_SPLIT_INACTIVITY_MS`
+  (2 minutes, same threshold) archives a record with damage once it's been
+  idle that long, which is enough for the next hit to start a fresh record.
+  This is a JS-only change; no game-side signature was fixed. `on_enter_area`
+  remains broken, so fights won't split until ~2 minutes after the last hit,
+  rather than the instant the next area loads.
 
 ### Known limitations
 - `Actor.canceled_action` (`0xBFF8`) could not be cross-verified (no
