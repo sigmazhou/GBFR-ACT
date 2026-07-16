@@ -123,7 +123,12 @@ class Act:
         except:
             logging.error('on_process_damage_evt', exc_info=True)
         res = hook.original(p_target_evt, p_source_evt, a3, a4)  # return 0 if it is non processed damage event
-        if Act._debug: print(f'[debug] damage_evt hit: res={res!r} target={target!r} source={source!r} raw_damage={source_evt.damage if source else None!r}')  # TEMP DEBUG, remove after diagnosis
+        if Act._debug:  # TEMP DEBUG, remove after diagnosis
+            try:
+                dump = bytes_from(p_source_evt, 0x2d0).hex()
+            except Exception as e:
+                dump = f'<read failed: {e}>'
+            print(f'[debug] damage_evt hit: res={res!r} p_source_evt={p_source_evt:#x} dump={dump}')
         if not (res and target and source): return res  # or if get target or source failed
         try:
             flags_ = source_evt.flags
