@@ -1,4 +1,7 @@
 # GBFR-ACT
+Custom fork for dlc compatibility fix
+
+
 ## Granblue Fantasy Relink - Analytics for Combat Tracking
 
 ![img](./img/demo.jpg)
