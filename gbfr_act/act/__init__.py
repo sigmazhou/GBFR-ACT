@@ -13,6 +13,7 @@ def ensure_same(args):
 
 class Act:
     _sys_key = '_act_'
+    _debug = True  # TEMP: prints raw damage-hook hits to diagnose post-DLC breakage; flip off once resolved
 
     def __init__(self):
         self.server = get_server()
@@ -122,6 +123,7 @@ class Act:
         except:
             logging.error('on_process_damage_evt', exc_info=True)
         res = hook.original(p_target_evt, p_source_evt, a3, a4)  # return 0 if it is non processed damage event
+        if Act._debug: print(f'[debug] damage_evt hit: res={res!r} target={target!r} source={source!r} raw_damage={source_evt.damage if source else None!r}')  # TEMP DEBUG, remove after diagnosis
         if not (res and target and source): return res  # or if get target or source failed
         try:
             flags_ = source_evt.flags
