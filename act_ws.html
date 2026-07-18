@@ -568,6 +568,12 @@
             return i18n.global.te(`game.actors.${name_key}`) ? i18n.global.t(`game.actors.${name_key}`) : name_key;
         }
 
+        // Player characters are always "Pl"-prefixed (e.g. Pl1900); enemies are "Em"-prefixed.
+        // party_idx only tells us whether we resolved a party *slot* for the source (name/color/
+        // grouping) - it's unrelated to whether the source is a player at all, since AI-controlled
+        // solo teammates never resolve a slot (see Act.party_index_of) but are still real players.
+        const is_player_actor_type = (type) => /^pl/i.test(type);
+
         const action_name = (actor_id, action_id) => {
             const key = `game.actions.${numberToHexStringWithZFill(actor_id, 8)}.${action_id}`;
             return i18n.global.te(key) ? i18n.global.t(key) : `${action_id}`;
@@ -724,8 +730,10 @@
                 this.idx = idx;
                 this.party_idx = party_idx;
                 this.name_key = type.toUpperCase(); // numberToHexStringWithZFill(id, 8);
-                this.display_name_user = this.display_name = `[${party_idx}]${actor_name(this.name_key)}#${idx}`;
-                this.color = Actor.colors[party_idx];
+                this.display_name_user = this.display_name = party_idx === -1
+                    ? `${actor_name(this.name_key)}#${idx}`
+                    : `[${party_idx}]${actor_name(this.name_key)}#${idx}`;
+                this.color = Actor.colors[party_idx] || Actor.colors[Actor.colors.length - 1];
                 this.damage = 0;
                 this.damage_in_minute = 0;
                 this.dps = 0;
@@ -852,7 +860,7 @@
                         case "damage":
                             const {source, damage} = evt.data;
                             const [source_type, source_idx, source_id, source_party_idx, ..._] = source;
-                            if (source_party_idx === -1) break;
+                            if (!is_player_actor_type(source_type)) break;
                             const actor = this.get_actor(source);
                             actor.damage_in_minute -= damage;
                             break;
@@ -1011,7 +1019,7 @@
                     // TODO: 自伤类技能的过滤
                     const current_record = get_latest_record();
                     current_record.last_record_at = time_ms;
-                    if (source_party_idx === -1) return;
+                    if (!is_player_actor_type(source_type)) return;
                     current_record.get_ex().events.push(evt);
                     current_record.damage += damage;
                     const actor = current_record.get_actor(source);
@@ -1049,7 +1057,7 @@
                     const [actor_type, actor_idx, actor_id, actor_party_idx, ..._] = actor;
                     const current_record = get_latest_record();
                     current_record.last_record_at = time_ms;
-                    if (actor_party_idx === -1) return;
+                    if (!is_player_actor_type(actor_type)) return;
                     current_record.get_ex().events.push(evt);
                     const actor_record = current_record.get_actor(actor);
                     actor_record.death_cnt = death_cnt;

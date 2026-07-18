@@ -111,3 +111,21 @@
   `Act.on_enter_area()` override point (used by `act_ws.py`) is unchanged, just
   now triggered by this hook. The 2-minute inactivity fallback added yesterday
   remains in place as a backstop in case this hook's signature breaks too.
+
+## 2026-07-17
+
+### Fixed
+- Fixed AI-controlled solo teammates never showing up on the damage meter or
+  death counter, while online teammates worked fine. Cause: the frontend
+  dropped any event whose source didn't resolve to a party slot
+  (`party_idx === -1`), but AI companions never get a cached identity (they sit
+  in slots 1-3 with `is_online == 0` forever, which `_on_refresh_player_identity`
+  treats the same as an unfilled online slot) — so their `party_idx` is
+  permanently `-1`, not just transiently.
+  - Fix (per gbfr-logs' approach): stop gating on party-slot resolution and
+    gate on whether the source is a player character at all. Added
+    `is_player_actor_type()` (`Pl`-prefixed type) in `act_ws.html` and used it
+    in `on_damage`, `process_overtime`, and `on_inc_death_cnt` instead of the
+    `party_idx === -1` check. Party slot/identity is still used for
+    display (name/color) but no longer required to record the hit.
+  - Frontend-only change; no Python/game-side hook changes needed.
